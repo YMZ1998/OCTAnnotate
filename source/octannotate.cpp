@@ -512,7 +512,11 @@ void OCTAnnotate::on_actionLoadOCTFile_triggered(QString scanFilePath)
     if (selectNew){
         QString fileName = scanFilePath;
         if (fileName == "")
-            fileName = QFileDialog::getOpenFileName(this, tr("Open OCT file"), octBaseDir.absolutePath(), tr("Avanti RTvue raw OCT data file (*.OCT)"));
+            fileName = QFileDialog::getOpenFileName(
+                this,
+                tr("Open OCT file"),
+                octBaseDir.absolutePath(),
+                tr("OCT scan files (*.OCT *.E2E);;Avanti RTvue raw OCT data file (*.OCT);;Heidelberg E2E file (*.E2E)"));
 
         qDebug() << "Opening scan: " << fileName;
 
@@ -520,9 +524,10 @@ void OCTAnnotate::on_actionLoadOCTFile_triggered(QString scanFilePath)
             octFile.setFileName(fileName);
             QFileInfo fileInfo(octFile);
             scanName = fileInfo.fileName();
+            const QString suffix = fileInfo.suffix().toLower();
 
             patientData = PatientData();
-            patientData.setIsBinary(true);
+            patientData.setIsBinary(suffix == "oct");
 
             ui->statusBar->showMessage("Trwa odczyt danych badania OCT...");
             progressBar->setMaximum(100);
@@ -535,9 +540,13 @@ void OCTAnnotate::on_actionLoadOCTFile_triggered(QString scanFilePath)
             rwData->setDirectoryManual(&manualDir);
             rwData->setDirectoryAuto(&autoDir);
             rwData->setDataSaveStrucure(dataSaveStructure);
-            rwData->addDirective("readPatientData");
-            rwData->addDirective("readGeneralExamData");
-            rwData->addDirective("readOctExamFile");
+            if (suffix == "e2e"){
+                rwData->addDirective("readE2EFile");
+            } else {
+                rwData->addDirective("readPatientData");
+                rwData->addDirective("readGeneralExamData");
+                rwData->addDirective("readOctExamFile");
+            }
 
             QThread *thread = new QThread;
             rwData->moveToThread(thread);
@@ -5023,7 +5032,10 @@ void OCTAnnotate::on_addScanFileButton_clicked(QString filePath)
 {
     QString pathOctExam;
     if (filePath.isEmpty())
-        pathOctExam = QFileDialog::getOpenFileName(this, tr("Open OCT file"), octBaseDir.absolutePath(), tr("Avanti RTvue raw OCT data file (*.OCT)"));
+      pathOctExam = QFileDialog::getOpenFileName(
+          this, tr("Open OCT file"), octBaseDir.absolutePath(),
+          tr("OCT scan files (*.OCT *.E2E);;Avanti RTvue raw OCT data file "
+             "(*.OCT);;Heidelberg E2E file (*.E2E)"));
     else
         pathOctExam = filePath;
 

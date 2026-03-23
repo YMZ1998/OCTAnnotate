@@ -111,6 +111,15 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/images")
     )
 endif()
 
+add_custom_command(TARGET OCTAnnotate POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "$<TARGET_FILE_DIR:OCTAnnotate>/tools"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/import_e2e.py"
+        "$<TARGET_FILE_DIR:OCTAnnotate>/tools/import_e2e.py"
+    VERBATIM
+)
+
 install(TARGETS OCTAnnotate
     RUNTIME DESTINATION .
     BUNDLE DESTINATION .
@@ -118,6 +127,10 @@ install(TARGETS OCTAnnotate
 
 install(FILES ${OCTANNOTATE_RUNTIME_FILES}
     DESTINATION .
+)
+
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/tools/import_e2e.py"
+    DESTINATION tools
 )
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/images")

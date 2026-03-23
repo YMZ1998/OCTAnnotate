@@ -6,6 +6,14 @@
 #include <QColor>
 #include <QDebug>
 #include <QMessageBox>
+#include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
+#include <QStandardPaths>
 //#include <QtXml>
 
 ReadWriteData::ReadWriteData(QObject *parent) : QObject(parent)
@@ -43,6 +51,10 @@ void ReadWriteData::process(){
         }
         if (dir == "readOctExamFile"){
             this->readOctExamFile();
+            emit readingDataFinished("");
+        }
+        if (dir == "readE2EFile"){
+            this->readE2EFile();
             emit readingDataFinished("");
         }
         if (dir == "readManualSegmentationData"){
@@ -538,6 +550,228 @@ void ReadWriteData::readOctExamFile(){
     QString octExamFilePath = manualDir->path().append("/" + scanName + ".mvri");
     QFile octExamFile(octExamFilePath);
     readFileManualSegmentation(&octExamFile);
+}
+
+void ReadWriteData::readE2EFile(){
+    if (octFile == 0 || octFile->fileName().isEmpty()){
+        emit errorOccured(tr("E2E file path is empty."));
+        return;
+    }
+
+    QString convertedDirPath;
+    QString errorMessage;
+    if (!convertE2EFile(octFile->fileName(), &convertedDirPath, &errorMessage)){
+        emit errorOccured(errorMessage);
+        return;
+    }
+
+    if (!loadConvertedE2E(convertedDirPath, &errorMessage)){
+        emit errorOccured(errorMessage);
+    }
+}
+
+bool ReadWriteData::convertE2EFile(const QString &inputPath, QString *outputDirPath, QString *errorMessage){
+    QFileInfo inputInfo(inputPath);
+    if (!inputInfo.exists()){
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not find the selected E2E file.");
+        return false;
+    }
+
+    const QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (appDataDir.isEmpty()){
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not resolve the local cache directory for E2E import.");
+        return false;
+    }
+
+    const QString cacheKeySource = inputInfo.absoluteFilePath()
+        + "|"
+        + QString::number(inputInfo.lastModified().toMSecsSinceEpoch())
+        + "|"
+        + QString::number(inputInfo.size());
+    const QString cacheKey = QString::fromLatin1(
+        QCryptographicHash::hash(cacheKeySource.toUtf8(), QCryptographicHash::Sha1).toHex());
+
+    QDir cacheRoot(appDataDir);
+    if (!cacheRoot.mkpath("e2e_cache/" + cacheKey)){
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not create the local cache directory for E2E import.");
+        return false;
+    }
+
+    const QString targetDirPath = cacheRoot.absoluteFilePath("e2e_cache/" + cacheKey);
+    const QString metadataPath = QDir(targetDirPath).absoluteFilePath("metadata.json");
+    if (QFileInfo(metadataPath).exists()){
+        if (outputDirPath != 0)
+            *outputDirPath = targetDirPath;
+        return true;
+    }
+
+    const QString scriptPath = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("tools/import_e2e.py");
+    if (!QFileInfo(scriptPath).exists()){
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not find the bundled E2E import helper script.");
+        return false;
+    }
+
+    QString program = "python";
+    QStringList arguments;
+    arguments << scriptPath << inputInfo.absoluteFilePath() << targetDirPath;
+
+    QProcess process;
+    process.start(program, arguments);
+    if (!process.waitForStarted()){
+        program = "py";
+        arguments.clear();
+        arguments << "-3" << scriptPath << inputInfo.absoluteFilePath() << targetDirPath;
+        process.start(program, arguments);
+        if (!process.waitForStarted()){
+            if (errorMessage != 0)
+                *errorMessage = tr("Could not start Python to import the E2E file. Install Python and the `oct-converter` package.");
+            return false;
+        }
+    }
+
+    process.waitForFinished(-1);
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0){
+        QString stderrText = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+        QString stdoutText = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
+        QString details = stderrText;
+        if (details.isEmpty())
+            details = stdoutText;
+        if (details.isEmpty())
+            details = tr("Unknown conversion error.");
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not import the E2E file. %1").arg(details);
+        return false;
+    }
+
+    if (!QFileInfo(metadataPath).exists()){
+        if (errorMessage != 0)
+            *errorMessage = tr("The E2E converter finished without generating metadata.");
+        return false;
+    }
+
+    if (outputDirPath != 0)
+        *outputDirPath = targetDirPath;
+    return true;
+}
+
+bool ReadWriteData::loadConvertedE2E(const QString &outputDirPath, QString *errorMessage){
+    QDir outputDir(outputDirPath);
+    QFile metadataFile(outputDir.absoluteFilePath("metadata.json"));
+    if (!metadataFile.open(QIODevice::ReadOnly | QIODevice::Text)){
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not open the converted E2E metadata file.");
+        return false;
+    }
+
+    QJsonParseError jsonError;
+    const QJsonDocument metadataDoc = QJsonDocument::fromJson(metadataFile.readAll(), &jsonError);
+    metadataFile.close();
+    if (jsonError.error != QJsonParseError::NoError || !metadataDoc.isObject()){
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not parse the converted E2E metadata file.");
+        return false;
+    }
+
+    const QJsonObject metadata = metadataDoc.object();
+    QStringList imageFileList = outputDir.entryList(QStringList() << "bscan_*.png", QDir::Files, QDir::Name);
+    if (imageFileList.isEmpty()){
+        if (errorMessage != 0)
+            *errorMessage = tr("No B-scan images were produced from the E2E file.");
+        return false;
+    }
+
+    QStringList absoluteImagePaths;
+    foreach (const QString &fileName, imageFileList) {
+        absoluteImagePaths.append(outputDir.absoluteFilePath(fileName));
+    }
+
+    emit processingData(0, tr("Importing E2E data..."));
+
+    QImage firstImage(absoluteImagePaths.first());
+    if (firstImage.isNull()){
+        if (errorMessage != 0)
+            *errorMessage = tr("Could not load the converted B-scan images.");
+        return false;
+    }
+
+    pData->setIsBinary(false);
+    pData->setOCTDevice(SPECTRALIS);
+    pData->setLastName(metadata.value("last_name").toString().toUpper());
+    pData->setFirstName(metadata.value("first_name").toString().toUpper());
+    pData->setBscanWidth(firstImage.width());
+    pData->setBscanHeight(firstImage.height());
+    pData->setBscansNumber(absoluteImagePaths.count());
+    pData->setBscansNumberAll(absoluteImagePaths.count());
+
+    const QString laterality = metadata.value("laterality").toString().trimmed().toUpper();
+    if (laterality == "R")
+        pData->setEye(1);
+    else if (laterality == "L")
+        pData->setEye(0);
+
+    const QString sex = metadata.value("sex").toString().trimmed().toUpper();
+    if (sex.startsWith("M"))
+        pData->setGender(1);
+    else if (sex.startsWith("F"))
+        pData->setGender(0);
+
+    const QString birthDate = metadata.value("birth_date").toString().trimmed();
+    QDate parsedBirthDate = QDate::fromString(birthDate, Qt::ISODate);
+    if (!parsedBirthDate.isValid() && birthDate.length() >= 10)
+        parsedBirthDate = QDate::fromString(birthDate.left(10), "yyyy-MM-dd");
+    if (parsedBirthDate.isValid())
+        pData->setBirthDate(parsedBirthDate);
+
+    const QString acquisitionDate = metadata.value("acquisition_date").toString().trimmed();
+    QDateTime acquisitionDateTime = QDateTime::fromString(acquisitionDate, Qt::ISODate);
+    if (!acquisitionDateTime.isValid() && acquisitionDate.length() >= 19)
+        acquisitionDateTime = QDateTime::fromString(acquisitionDate.left(19), "yyyy-MM-ddTHH:mm:ss");
+    if (acquisitionDateTime.isValid()){
+        pData->setExamDate(acquisitionDateTime.date());
+        pData->setExamTime(acquisitionDateTime.time());
+    }
+
+    const double spacingX = metadata.value("pixel_spacing_x_mm").toDouble(0.0);
+    const double spacingY = metadata.value("pixel_spacing_y_mm").toDouble(0.0);
+    const double spacingZ = metadata.value("pixel_spacing_z_mm").toDouble(0.0);
+    if (spacingX > 0.0)
+        pData->setVoxelWidth(spacingX * (pData->getBscanWidth() - 1));
+    if (spacingZ > 0.0)
+        pData->setVoxelHeight(spacingZ * (pData->getBscansNumber() - 1));
+    if (spacingY > 0.0)
+        pData->setVoxelDepth(spacingY * (pData->getBscanHeight() - 1));
+
+    pData->setImageFileList(absoluteImagePaths);
+    pData->resetBscansData();
+
+    const double tasks = absoluteImagePaths.count() * 2 + 1;
+    double count = 0.0;
+    for (int imageIndex = 0; imageIndex < absoluteImagePaths.count(); imageIndex++){
+        const QImage image(absoluteImagePaths.at(imageIndex));
+        pData->setOCTdata(image, imageIndex);
+        emit processingData((++count) / tasks * 100.0, "");
+    }
+
+    Calculate calc;
+    for (int imageIndex = 0; imageIndex < absoluteImagePaths.count(); imageIndex++){
+        QImage image(absoluteImagePaths.at(imageIndex));
+        pData->setFlatDifferences(imageIndex, calc.calculateFlatteningDifferences(&image));
+        emit processingData((++count) / tasks * 100.0, "");
+    }
+
+    QImage fundus(outputDir.absoluteFilePath(metadata.value("fundus_file").toString("fundus.png")));
+    if (fundus.isNull()){
+        fundus = QImage(pData->getBscanWidth(), pData->getBscansNumber(), QImage::Format_Indexed8);
+        fundus.fill(0);
+    }
+    pData->setFundusImage(fundus);
+
+    emit processingData((++count) / tasks * 100.0, tr("E2E import finished."));
+    return true;
 }
 
 void ReadWriteData::readBinaryFile(QFile *dataFile, double *count, double *tasks){
@@ -1093,6 +1327,8 @@ void ReadWriteData::saveManualSegmentationData(){
                     xmlWriter.writeTextElement("manufacturer", "Optopol");
                 else if (pData->getOCTDevice() == AVANTI)
                     xmlWriter.writeTextElement("manufacturer", "Optovue");
+                else if (pData->getOCTDevice() == SPECTRALIS)
+                    xmlWriter.writeTextElement("manufacturer", "Heidelberg");
                 // size
                 xmlWriter.writeStartElement("size");
                 xmlWriter.writeTextElement("unit", "voxel");
@@ -1273,6 +1509,8 @@ void ReadWriteData::saveAutoSegmentationData(){
                     xmlWriter.writeTextElement("manufacturer", "Optopol");
                 else if (pData->getOCTDevice() == AVANTI)
                     xmlWriter.writeTextElement("manufacturer", "Optovue");
+                else if (pData->getOCTDevice() == SPECTRALIS)
+                    xmlWriter.writeTextElement("manufacturer", "Heidelberg");
                 // size
                 xmlWriter.writeStartElement("size");
                 xmlWriter.writeTextElement("unit", "voxel");

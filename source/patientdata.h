@@ -50,7 +50,8 @@ QList<Layers> getLayersForError();
 
 enum OCTDevice{
     COPERNICUS = 0,
-    AVANTI = 1
+    AVANTI = 1,
+    SPECTRALIS = 2
 };
 
 enum Pathologies{

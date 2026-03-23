@@ -42,8 +42,11 @@ public slots:
 private:
     void readOctExamData();
     void readOctExamFile();
+    void readE2EFile();
     void readBinaryFile(QFile *dataFile, double *count, double *tasks);
     void readFileAutoSegmentation(QFile *dataFile);
+    bool convertE2EFile(const QString &inputPath, QString *outputDirPath, QString *errorMessage);
+    bool loadConvertedE2E(const QString &outputDirPath, QString *errorMessage);
 
     void saveGeneralExamData();
     void saveManualSegmentationData();
