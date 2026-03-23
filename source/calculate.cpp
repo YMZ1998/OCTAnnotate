@@ -3,6 +3,7 @@
 
 #include <QDebug>
 #include <QColor>
+#include <QVector>
 
 Calculate::Calculate(QObject *parent) :
     QObject(parent)
@@ -747,7 +748,7 @@ QList<int> Calculate::calculateFlatteningDifferences(QList<QList<int> > img){
     int poly_deg = 2;
     int points_num = x.count();
 
-    double sigmaX[2*poly_deg+1];    //Array that will store the values of sigma(xi),sigma(xi^2),sigma(xi^3)....sigma(xi^2n)
+    QVector<double> sigmaX(2*poly_deg+1, 0.0);    //Array that will store the values of sigma(xi),sigma(xi^2),sigma(xi^3)....sigma(xi^2n)
     for (int i=0; i < (2*poly_deg+1); i++){
         double sigma_temp = 0;
         for (int j=0; j < points_num; j++){
@@ -757,14 +758,15 @@ QList<int> Calculate::calculateFlatteningDifferences(QList<QList<int> > img){
     }
 
     //the Normal matrix(augmented) that will store the equations, 'a' is for value of the final coefficients
-    double Normal_matrix[poly_deg+1][poly_deg+2], coeff[poly_deg+1];
+    QVector<QVector<double> > Normal_matrix(poly_deg+1, QVector<double>(poly_deg+2, 0.0));
+    QVector<double> coeff(poly_deg+1, 0.0);
     for (int i=0; i <= poly_deg; i++){
         for (int j=0; j <= poly_deg; j++){
             Normal_matrix[i][j] = sigmaX[i+j];  //Build the Normal matrix by storing the corresponding coefficients at the right positions except the last column of the matrix
         }
     }
 
-    double sigmaY[poly_deg+1];  //Array to store the values of sigma(yi),sigma(xi*yi),sigma(xi^2*yi)...sigma(xi^n*yi)
+    QVector<double> sigmaY(poly_deg+1, 0.0);  //Array to store the values of sigma(yi),sigma(xi*yi),sigma(xi^2*yi)...sigma(xi^n*yi)
     for (int i=0; i < (poly_deg+1); i++){
         double sigma_temp = 0;
         for (int j=0; j < points_num; j++){
